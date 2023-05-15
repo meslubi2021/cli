@@ -35,10 +35,11 @@ type API struct {
 	cursor          int
 	hasExpectations bool
 	port            int
+	writer          io.Writer
 }
 
 // NewAPI creates a new API instance and starts the server
-func NewAPI(expected []model.Output) *API {
+func NewAPI(expected []model.Output, writer io.Writer) *API {
 	fakeAPIHost := "127.0.0.1"
 	if runtime.GOOS == "linux" {
 		fakeAPIHost = "0.0.0.0"
@@ -60,6 +61,7 @@ func NewAPI(expected []model.Output) *API {
 	api := &API{
 		server:          server,
 		Expectations:    expected,
+		writer:          writer,
 		cursor:          0,
 		hasExpectations: len(expected) > 0,
 		port:            l.Addr().(*net.TCPAddr).Port,
@@ -116,20 +118,19 @@ func (a *API) ServeHTTP(_ http.ResponseWriter, r *http.Request) {
 		a.pushError(err)
 	}
 
+	if kind == "increment_metric" {
+		// Let's just output the metrics data and stop
+		a.outputRequestData(kind, actual)
+		return
+	}
+
 	if err := a.pushResult(kind, actual); err != nil {
 		a.pushError(err)
 		return
 	}
 
 	if !a.hasExpectations {
-		// output the data received to stdout
-		if err = json.NewEncoder(os.Stdout).Encode(map[string]any{
-			"type": kind,
-			"data": actual.Data,
-		}); err != nil {
-			// Fail so the user knows stdout is not working
-			log.Panicln("Failed to write to stdout: ", err)
-		}
+		a.outputRequestData(kind, actual)
 		return
 	}
 
@@ -160,6 +161,19 @@ func (a *API) assertExpectation(kind string, actual *model.UpdateWrapper) {
 	}
 	if err = compare(expected, actual); err != nil {
 		a.pushError(err)
+	}
+}
+
+func (a *API) outputRequestData(kind string, actual *model.UpdateWrapper) {
+	if a.writer != nil {
+		// output the data received to stdout
+		if err := json.NewEncoder(a.writer).Encode(map[string]any{
+			"type": kind,
+			"data": actual.Data,
+		}); err != nil {
+			// Fail so the user knows stdout is not working
+			log.Panicln("Failed to write to stdout: ", err)
+		}
 	}
 }
 
@@ -209,6 +223,8 @@ func decodeWrapper(kind string, data []byte) (actual *model.UpdateWrapper, err e
 		actual.Data, err = decode[model.RecordPackageManagerVersion](data)
 	case "record_update_job_error":
 		actual.Data, err = decode[model.RecordUpdateJobError](data)
+	case "increment_metric":
+		actual.Data, err = decode[model.IncrementMetric](data)
 	default:
 		return nil, fmt.Errorf("unexpected output type: %s", kind)
 	}

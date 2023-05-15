@@ -16,7 +16,7 @@ type CreatePullRequest struct {
 	PRTitle                string           `json:"pr-title" yaml:"pr-title,omitempty"`
 	PRBody                 string           `json:"pr-body" yaml:"pr-body,omitempty"`
 	CommitMessage          string           `json:"commit-message" yaml:"commit-message,omitempty"`
-	GroupedUpdate          bool             `json:"grouped-update" yaml:"grouped-update"`
+	DependencyGroup        map[string]any   `json:"dependency-group" yaml:"dependency-group,omitempty"`
 }
 
 type UpdatePullRequest struct {
@@ -26,6 +26,7 @@ type UpdatePullRequest struct {
 	PRTitle                string           `json:"pr-title" yaml:"pr-title,omitempty"`
 	PRBody                 string           `json:"pr-body" yaml:"pr-body,omitempty"`
 	CommitMessage          string           `json:"commit-message" yaml:"commit-message,omitempty"`
+	DependencyGroup        map[string]any   `json:"dependency-group" yaml:"dependency-group,omitempty"`
 }
 
 type DependencyFile struct {
@@ -36,6 +37,7 @@ type DependencyFile struct {
 	Name            string `json:"name" yaml:"name"`
 	Operation       string `json:"operation" yaml:"operation"`
 	SupportFile     bool   `json:"support_file" yaml:"support_file"`
+	SymlinkTarget   string `json:"symlink_target,omitempty" yaml:"symlink_target,omitempty"`
 	Type            string `json:"type" yaml:"type"`
 	Mode            string `json:"mode" yaml:"mode,omitempty"`
 }
@@ -57,4 +59,9 @@ type RecordPackageManagerVersion struct {
 type RecordUpdateJobError struct {
 	ErrorType    string         `json:"error-type" yaml:"error-type"`
 	ErrorDetails map[string]any `json:"error-details" yaml:"error-details"`
+}
+
+type IncrementMetric struct {
+	Metric string         `json:"metric" yaml:"metric"`
+	Tags   map[string]any `json:"tags" yaml:"tags"`
 }

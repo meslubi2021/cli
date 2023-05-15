@@ -29,7 +29,7 @@ var testCmd = &cobra.Command{
 			return fmt.Errorf("requires a scenario file")
 		}
 
-		scenario, err := readScenarioFile(file)
+		scenario, inputRaw, err := readScenarioFile(file)
 		if err != nil {
 			return err
 		}
@@ -42,7 +42,10 @@ var testCmd = &cobra.Command{
 			Debug:         debugging,
 			Expected:      scenario.Output,
 			ExtraHosts:    extraHosts,
+			InputName:     file,
+			InputRaw:      inputRaw,
 			Job:           &scenario.Input.Job,
+			LocalDir:      local,
 			Output:        output,
 			ProxyCertPath: proxyCertPath,
 			ProxyImage:    proxyImage,
@@ -58,20 +61,20 @@ var testCmd = &cobra.Command{
 	},
 }
 
-func readScenarioFile(file string) (*model.Scenario, error) {
+func readScenarioFile(file string) (*model.Scenario, []byte, error) {
 	var scenario model.Scenario
 
 	data, err := os.ReadFile(file)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open scenario file: %w", err)
+		return nil, nil, fmt.Errorf("failed to open scenario file: %w", err)
 	}
 	if err = json.Unmarshal(data, &scenario); err != nil {
 		if err = yaml.Unmarshal(data, &scenario); err != nil {
-			return nil, fmt.Errorf("failed to decode scenario file: %w", err)
+			return nil, nil, fmt.Errorf("failed to decode scenario file: %w", err)
 		}
 	}
 
-	return &scenario, nil
+	return &scenario, data, nil
 }
 
 func init() {
@@ -83,6 +86,7 @@ func init() {
 
 	testCmd.Flags().StringVarP(&output, "output", "o", "", "write scenario to file")
 	testCmd.Flags().StringVar(&cache, "cache", "", "cache import/export directory")
+	testCmd.Flags().StringVar(&local, "local", "", "local directory to use as fetched source")
 	testCmd.Flags().StringVar(&proxyCertPath, "proxy-cert", "", "path to a certificate the proxy will trust")
 	testCmd.Flags().BoolVar(&pullImages, "pull", true, "pull the image if it isn't present")
 	testCmd.Flags().BoolVar(&debugging, "debug", false, "run an interactive shell inside the updater")
