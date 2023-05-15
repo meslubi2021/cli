@@ -92,7 +92,7 @@ job:
     provider: github
     repo: dependabot/dependabot-core
     directory: "/npm_and_yarn/helpers"
-    branch: 
+    branch:
     api-endpoint: https://api.github.com/
     hostname: github.com
   dependencies:
@@ -323,18 +323,22 @@ job:
   update-subdependencies: false
   ignore-conditions:
   - dependency-name: npm
-    version-requirement: 
+    version-requirement:
     update-types:
     - version-update:semver-major
     source: ".github/dependabot.yml"
   - dependency-name: npm
     version-requirement: ">= 7.a, < 8"
-    update-types: 
+    update-types:
     source: "@dependabot ignore command"
-  requirements-update-strategy: 
+  requirements-update-strategy:
   allowed-updates:
   - dependency-type: direct
     update-type: all
+  dependency-groups:
+  - name: npm
+    rules:
+      patterns: ["npm", "@npmcli*"]
   credentials-metadata:
   - type: git_source
     host: github.com
@@ -353,8 +357,9 @@ job:
     npm-transitive-security-updates: true
   reject-external-code: false
   commit-message-options:
-    prefix: 
-    prefix-development: 
-    include-scope: 
+    prefix:
+    prefix-development:
+    include-scope:
   security-updates-only: true
+  repo-private: false
 `

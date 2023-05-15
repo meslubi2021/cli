@@ -4,6 +4,10 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"github.com/docker/docker/pkg/archive"
+	"github.com/hexops/gotextdiff"
+	"github.com/hexops/gotextdiff/myers"
+	"github.com/hexops/gotextdiff/span"
 	"io"
 	"log"
 	"net/http"
@@ -21,10 +25,14 @@ import (
 )
 
 type RunParams struct {
+	// Input file
+	Input string
 	// job definition passed to the updater
 	Job *model.Job
 	// expectations asserted at the end of a test
 	Expected []model.Output
+	// directory to copy into the updater container as the repo
+	LocalDir string
 	// credentials passed to the proxy
 	Creds []model.Credential
 	// local directory used for caching
@@ -48,6 +56,10 @@ type RunParams struct {
 	UpdaterImage string
 	// ProxyImage is the image to use for the proxy
 	ProxyImage string
+	// Writer is where API calls will be written to
+	Writer    io.Writer
+	InputName string
+	InputRaw  []byte
 }
 
 func Run(params RunParams) error {
@@ -65,7 +77,7 @@ func Run(params RunParams) error {
 		cancel()
 	}()
 
-	api := server.NewAPI(params.Expected)
+	api := server.NewAPI(params.Expected, params.Writer)
 	defer api.Stop()
 
 	var outFile *os.File
@@ -94,38 +106,67 @@ func Run(params RunParams) error {
 	}
 
 	api.Complete()
-	if outFile != nil {
-		if err := outFile.Truncate(0); err != nil {
-			return fmt.Errorf("failed to truncate output file: %w", err)
-		}
-		if params.Job.Source.Commit == nil {
-			// store the SHA we worked with for reproducible tests
-			params.Job.Source.Commit = api.Actual.Input.Job.Source.Commit
-		}
-		api.Actual.Input.Job = *params.Job
 
-		// ignore conditions help make tests reproducible
-		// so they are generated if there aren't any yet
-		if len(api.Actual.Input.Job.IgnoreConditions) == 0 && api.Actual.Input.Job.PackageManager != "submodules" {
-			if err := generateIgnoreConditions(&params, &api.Actual); err != nil {
-				return err
-			}
-		}
-		if err := yaml.NewEncoder(outFile).Encode(api.Actual); err != nil {
-			return fmt.Errorf("failed to write output: %v", err)
-		}
+	output, err := generateOutput(params, api, outFile)
+	if err != nil {
+		return err
 	}
+
 	if len(api.Errors) > 0 {
-		log.Println("The following errors occurred:")
-
-		for _, e := range api.Errors {
-			log.Println(e)
-		}
-
-		return fmt.Errorf("update failed expectations")
+		return diff(params, outFile, output)
 	}
 
 	return nil
+}
+
+func generateOutput(params RunParams, api *server.API, outFile *os.File) ([]byte, error) {
+	if params.Job.Source.Commit == nil {
+		// store the SHA we worked with for reproducible tests
+		params.Job.Source.Commit = api.Actual.Input.Job.Source.Commit
+	}
+	api.Actual.Input.Job = *params.Job
+
+	// ignore conditions help make tests reproducible, so they are generated if there aren't any yet
+	if len(api.Actual.Input.Job.IgnoreConditions) == 0 && api.Actual.Input.Job.PackageManager != "submodules" {
+		if err := generateIgnoreConditions(&params, &api.Actual); err != nil {
+			return nil, err
+		}
+	}
+
+	output, err := yaml.Marshal(api.Actual)
+	if err != nil {
+		return nil, fmt.Errorf("failed to write output: %v", err)
+	}
+
+	if outFile != nil {
+		if err := outFile.Truncate(0); err != nil {
+			return nil, fmt.Errorf("failed to truncate output file: %w", err)
+		}
+		n, err := outFile.Write(output)
+		if err != nil {
+			return nil, fmt.Errorf("failed to write output: %w", err)
+		}
+		if n != len(output) {
+			return nil, fmt.Errorf("failed to write complete output: %w", io.ErrShortWrite)
+		}
+	}
+	return output, nil
+}
+
+func diff(params RunParams, outFile *os.File, output []byte) error {
+	inName := "input.yml"
+	outName := "output.yml"
+	if params.InputName != "" {
+		inName = params.InputName
+	}
+	if outFile != nil {
+		outName = outFile.Name()
+	}
+	aString := string(params.InputRaw)
+	edits := myers.ComputeEdits(span.URIFromPath(inName), aString, string(output))
+	_, _ = fmt.Fprintln(os.Stderr, gotextdiff.ToUnified(inName, outName, aString, edits))
+
+	return fmt.Errorf("update failed expectations")
 }
 
 var (
@@ -292,14 +333,63 @@ func runContainers(ctx context.Context, params RunParams, api *server.API) error
 	}
 	defer updater.Close()
 
+	// put the clone dir in the updater container to be used by during the update
+	if params.LocalDir != "" {
+		if err = putCloneDir(ctx, cli, updater, params.LocalDir); err != nil {
+			return err
+		}
+	}
+
 	if params.Debug {
 		if err := updater.RunShell(ctx, prox.url, api.Port()); err != nil {
 			return err
 		}
 	} else {
-		if err := updater.RunUpdate(ctx, prox.url, api.Port()); err != nil {
+		const cmd = "update-ca-certificates && bin/run fetch_files && bin/run update_files"
+		if err := updater.RunCmd(ctx, cmd, dependabot, userEnv(prox.url, api.Port())...); err != nil {
 			return err
 		}
+	}
+
+	return nil
+}
+
+func putCloneDir(ctx context.Context, cli *client.Client, updater *Updater, dir string) error {
+	// Docker won't create the directory, so we have to do it first.
+	const cmd = "mkdir -p " + guestRepoDir
+	err := updater.RunCmd(ctx, cmd, dependabot)
+	if err != nil {
+		return fmt.Errorf("failed to create clone dir: %w", err)
+	}
+
+	r, err := archive.TarWithOptions(dir, &archive.TarOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to tar clone dir: %w", err)
+	}
+
+	opt := types.CopyToContainerOptions{}
+	err = cli.CopyToContainer(ctx, updater.containerID, guestRepoDir, r, opt)
+	if err != nil {
+		return fmt.Errorf("failed to copy clone dir to container: %w", err)
+	}
+
+	err = updater.RunCmd(ctx, "chown -R dependabot "+guestRepoDir, root)
+	if err != nil {
+		return fmt.Errorf("failed to initialize clone dir: %w", err)
+	}
+
+	// The directory needs to be a git repo, so we need to initialize it.
+	commands := []string{
+		"cd " + guestRepoDir,
+		"git init",
+		"git config user.email 'dependabot@github.com'",
+		"git config user.name 'dependabot'",
+		"git add .",
+		"git commit --quiet -m 'initial commit'",
+	}
+	err = updater.RunCmd(ctx, strings.Join(commands, " && "), dependabot)
+	if err != nil {
+		return fmt.Errorf("failed to initialize clone dir: %w", err)
 	}
 
 	return nil
