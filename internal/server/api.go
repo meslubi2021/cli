@@ -52,11 +52,16 @@ func NewAPI(expected []model.Output, writer io.Writer) *API {
 	if os.Getenv("FAKE_API_PORT") != "" {
 		port = os.Getenv("FAKE_API_PORT")
 	}
-	l, err := net.Listen("tcp", fakeAPIHost+":"+port)
+	addr := fmt.Sprintf("%v:%v", fakeAPIHost, port)
+	l, err := net.Listen("tcp", addr)
 	if err != nil {
 		panic(err)
 	}
+	if port == "0" {
+		addr = fmt.Sprintf("%v:%v", fakeAPIHost, l.Addr().(*net.TCPAddr).Port)
+	}
 	server := &http.Server{
+		Addr:              addr,
 		ReadTimeout:       5 * time.Second,
 		ReadHeaderTimeout: 5 * time.Second,
 		WriteTimeout:      10 * time.Second,
