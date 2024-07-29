@@ -244,6 +244,7 @@ var packageManagerLookup = map[string]string{
 	"hex":            "mix",
 	"nuget":          "nuget",
 	"npm_and_yarn":   "npm",
+	"python":         "pip",
 	"pip":            "pip",
 	"terraform":      "terraform",
 	"swift":          "swift",
